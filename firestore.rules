@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+   function signedIn() { return request.auth != null; }
+   function profileExists() { return signedIn() && exists(/databases/$(database)/documents/hrUsers/$(request.auth.uid)); }
+   function profile() { return get(/databases/$(database)/documents/hrUsers/$(request.auth.uid)).data; }
+   function active() { return profileExists() && profile().active == true; }
+   function hr() { return active() && profile().role == 'hr'; }
+   function supervisor() { return active() && profile().role == 'supervisor'; }
+   match /hrUsers/{uid} {
+     allow get: if signedIn() && request.auth.uid == uid;
+     allow list, create, update, delete: if false;
+   }
+   match /contractReviews/{id} {
+     allow read: if (hr() && resource.data.status in ['submitted','approved','returned'])
+       || (supervisor() && resource.data.reviewerUid == request.auth.uid);
+     allow create: if supervisor()
+       && request.resource.data.reviewerUid == request.auth.uid
+       && request.resource.data.department == profile().department
+       && request.resource.data.status in ['draft','submitted']
+       && request.resource.data.scores is list
+       && request.resource.data.scores.size() == 10;
+     allow update: if (
+       supervisor()
+       && resource.data.reviewerUid == request.auth.uid
+       && resource.data.status in ['draft','returned']
+       && request.resource.data.reviewerUid == resource.data.reviewerUid
+       && request.resource.data.department == resource.data.department
+       && request.resource.data.status in ['draft','submitted']
+       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fields','scores','total','employeeName','department','reviewerUid','reviewerEmail','status','updatedAt'])
+     ) || (
+       hr()
+       && resource.data.status == 'submitted'
+       && request.resource.data.status in ['approved','returned']
+       && request.resource.data.approverUid == request.auth.uid
+       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','approverUid','approverEmail','approvalNote','decidedAt','updatedAt'])
+     );
+     allow delete: if false;
+   }
+ }
+}
